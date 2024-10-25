@@ -1,0 +1,37 @@
+---
+title: "TidyTuesday Prophet"
+output: html_document
+date: "2024-10-25"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(lubridate)
+library(prophet)
+```
+
+
+```{r}
+df_sales <- read_csv("Data/example_retail_sales.csv")
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
