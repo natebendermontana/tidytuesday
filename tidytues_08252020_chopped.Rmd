@@ -1,0 +1,260 @@
+---
+title: "Chopped"
+output: html_document
+date: "2024-10-28"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidytuesdayR)
+library(tidyverse)
+library(tidymodels)
+library(scales)
+library(widyr)
+library(ranger)
+theme_set(theme_light())
+```
+
+```{r}
+tuesdata <- tidytuesdayR::tt_load(2020, week = 35)
+chopped <- tuesdata$chopped
+
+```
+
+```{r}
+chopped %>% 
+  ggplot(aes(episode_rating)) +
+  geom_histogram()
+
+chopped %>% 
+  arrange(episode_rating)
+
+chopped %>% 
+  filter(!is.na(episode_rating)) %>% 
+  ggplot(aes(series_episode, episode_rating)) + 
+  geom_point(aes(color = factor(season))) + 
+  geom_line(alpha=.5, color = "gray") +
+  geom_text(aes(label = episode_name), hjust = 1, check_overlap = T)
+  theme(legend.position = "none")
+
+
+chopped %>% 
+  filter(!is.na(episode_rating)) %>% 
+  group_by(season) %>% 
+  summarize(n_episodes = n(),
+            avg_rating = mean(episode_rating)) %>% 
+  ggplot(aes(season, avg_rating)) +
+  geom_line() +
+  geom_point(aes(size = n_episodes))
+
+```
+
+```{r}
+library(glue)
+
+
+chopped %>% 
+  arrange(desc(episode_rating)) %>% 
+  head(30) %>% 
+  mutate(name = glue("{ season }.{season_episode} { episode_name }"),
+    name = fct_reorder(name, episode_rating)) %>% 
+  ggplot(aes(episode_rating, name)) + 
+  geom_point()
+
+```
+
+## Ingredients!
+```{r}
+ingredients <- chopped %>% 
+  select(season, season_episode, episode_rating, series_episode, episode_name, appetizer:dessert) %>% 
+  pivot_longer(cols = c(appetizer:dessert), names_to = "course",
+               values_to = "ingredient") %>% 
+  separate_rows(ingredient, sep = ", ") %>% 
+  mutate(course = fct_relevel(course, c("appetizer", "entree")))
+
+ingredients %>% 
+  count(course, ingredient, sort = T) %>% 
+  filter(fct_lump(ingredient, 25, w = n) != "Other") %>% 
+  mutate(ingredient = fct_reorder(ingredient, n, sum),
+         course = fct_rev(course)) %>% 
+  ggplot(aes(n, ingredient, fill = course)) + 
+  geom_col() +
+  scale_fill_discrete(guide = guide_legend(reverse = T)) +
+  labs(title = "Most common Chopped ingredients",
+       x = "number of episodes")
+
+
+```
+
+
+```{r}
+library(ggraph)
+library(tidygraph)
+
+ingredients_filtered <- ingredients %>% 
+  add_count(ingredient) %>% 
+  filter(n >= 8)
+
+ingredients_filtered %>% 
+  pairwise_count(ingredient, series_episode, sort = T)
+
+# no pairs of common ingredients appear together in the same course across episodes
+ingredients_filtered %>% 
+  unite(episode_course, series_episode, course) %>% 
+  pairwise_count(ingredient, episode_course, sort = T)
+
+
+ingredient_correlations %>% 
+  head(75) %>% 
+  ggraph(layout = "fr") + 
+  geom_edge_link(edge_alp) + 
+  geom_node_point() + 
+  geom_node_text(aes(label = name), repel = T)
+  
+
+```
+
+## Do any ingredients get more popular in later seasons?
+
+```{r}
+early_late_ingredients <- ingredients_filtered %>%
+  group_by(ingredient) %>% 
+  summarize(first_season = min(season),
+            avg_season = mean(season),
+            last_season = max(season),
+            n_appearances = n()) %>% 
+  #filter(n_appearances >= 10) %>% 
+  arrange(desc(avg_season)) %>% 
+  slice(c(1:6, tail(row_number())))
+
+ingredients_filtered %>% 
+  semi_join(early_late_ingredients, by = "ingredient") %>% 
+  mutate(ingredient = fct_reorder(ingredient, season)) %>% 
+  ggplot(aes(season, ingredient)) +
+  geom_boxplot()
+```
+
+# What ingredients are popular? 
+Which ingredients lead to an good or bad episode?
+```{r}
+ingredients_wide <- ingredients_filtered %>% 
+  select(season, series_episode, episode_rating, ingredient) %>% 
+  mutate(value = 1) %>% 
+  pivot_wider(names_from = ingredient, 
+              values_from = value,
+              values_fill = list(value = 0)) %>% 
+  select(-series_episode) %>% 
+  janitor::clean_names()
+
+ingredients_wide
+
+lm(episode_rating ~ season, data = ingredients_wide)
+
+set.seed(20241028)
+split_data <- ingredients_wide %>%
+  filter(!is.na(episode_rating)) %>% 
+  initial_split()
+
+training_set <- training(split_data)
+testing_set <- testing(split_data)
+
+```
+
+```{r}
+cv_samples <- training_set %>% 
+  vfold_cv(v = 2)
+
+model_spec <- rand_forest(mode = "regression", mtry = tune(), trees = tune()) %>% 
+  set_engine("ranger")
+
+parameter_search <- model_spec %>% 
+  tune_grid(episode_rating ~ ., resamples = cv_samples)
+
+```
+
+```{r}
+parameter_search %>% 
+  collect_metrics() %>% 
+  filter(.metric =="rmse") %>% 
+  ggplot(aes(penalty, mean)) +
+  geom_line() + 
+  scale_x_log10()
+
+fit <- linear_reg(penalty = 1e-4) %>% 
+  set_engine("glmnet") %>% 
+  fit(episode_rating ~., training_set)
+
+fit$fit %>% 
+  tidy() %>% 
+  filter(step == 40)
+
+
+```
+
+```{r}
+rf_model <- rand_forest(mode = "regression", mtry = 3, trees = 500) %>% 
+  set_engine("ranger") %>% 
+  fit(episode_rating ~., training_set)
+
+
+predict(rf_model, testing_set) %>% 
+  bind_cols(testing_set) %>% 
+  rmse(.pred, episode_rating)
+
+# can't improve on a dummy model for predicting episode quality from ingredients...rmse gets imperceptibly better
+testing_set %>% 
+  mutate(average = mean(episode_rating)) %>% 
+    rmse(average, episode_rating)
+
+
+
+```
+
+# Spline model
+```{r}
+rec <- recipe(episode_rating ~ season, training_set) %>%
+  step_ns(season, deg_free = tune())
+
+parameter_search_df <- linear_reg() %>%
+  set_engine("lm") %>%
+  tune_grid(rec, resamples = cv_samples)
+
+parameter_search_df %>%
+  collect_metrics() %>%
+  filter(.metric == "rmse") %>%
+  ggplot(aes(deg_free, mean)) +
+  geom_line()
+
+training_data_processed <- recipe(episode_rating ~ season, training_set) %>%
+  step_ns(season, deg_free = 2) %>%
+  prep() %>%
+  juice()
+
+spline_model <- linear_reg() %>%
+  set_engine("lm") %>%
+  fit(episode_rating ~ season, data = juice(training_data_processed))
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
