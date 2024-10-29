@@ -1,0 +1,143 @@
+---
+title: "Palmer Penguins"
+output: html_document
+date: "2024-10-29"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Explore data
+
+```{r}
+library(palmerpenguins)
+library(tidyverse)
+library(tidymodels)
+theme_set(theme_light())
+
+df_raw <- penguins
+```
+
+```{r}
+df_raw %>% 
+  count(species, island, sort = T)
+
+df_raw %>% 
+  count(year, sort = T)
+
+df_raw %>% 
+  filter(!is.na(sex)) %>% 
+  ggplot(aes(flipper_length_mm, bill_length_mm, color = sex, size = body_mass_g)) +
+  geom_point(alpha = .7) + 
+  facet_wrap(~species)
+
+```
+
+# Building a model to predict penguin sex
+```{r}
+df_penguins <- df_raw %>% 
+  filter(!is.na(sex)) %>% 
+  select(-year, -island)
+
+set.seed(123)
+
+split_data <- initial_split(df_penguins, strata = sex)
+training_set <- training(split_data)
+testing_set <- testing(split_data)
+
+set.seed(234)
+penguin_boot <- bootstraps(training_set)
+penguin_boot
+
+```
+
+# let's make some models
+```{r}
+# logistic regression
+glm_spec <- logistic_reg() %>% 
+  set_engine("glm")
+
+# random forest
+rf_spec <- rand_forest() %>% 
+  set_mode("classification") %>% 
+  set_engine("ranger")
+
+```
+
+```{r}
+penguin_wf <- workflow() %>% 
+  add_formula(sex ~ .,)
+
+penguin_wf
+```
+
+```{r}
+glm_results <- penguin_wf %>% 
+  add_model(glm_spec) %>% 
+  fit_resamples(
+    resamples = penguin_boot,
+    control = control_resamples(save_pred = T, verbose = T)
+  )
+
+rf_results <- penguin_wf %>% 
+  add_model(rf_spec) %>% 
+  fit_resamples(
+    resamples = penguin_boot,
+    control = control_resamples(save_pred = T, verbose = T)
+  )
+
+```
+
+# Evaluate modeling
+```{r}
+collect_metrics(rf_results)
+
+collect_metrics(glm_results)
+```
+
+## moving forward with the glm model
+```{r}
+glm_results %>% 
+  conf_mat_resampled()
+```
+
+```{r}
+glm_results %>% 
+  collect_predictions() %>% 
+  group_by(id) %>% 
+  roc_curve(sex, .pred_female) %>% 
+  ggplot(aes(1-specificity, sensitivity, color = id)) + 
+  geom_abline(lty = 2, color = "grey80", size = 1.5) +
+  geom_path(show.legend = F, alpha = .6, size = 1.2) +
+  coord_equal()
+```
+
+```{r}
+penguin_final <- penguin_wf %>% 
+  add_model(glm_spec) %>% 
+  last_fit(split_data)
+
+collect_metrics(penguin_final)
+```
+
+```{r}
+collect_predictions(penguin_final) %>% 
+  conf_mat(sex, .pred_class)
+```
+
+## grab the fitted final workflow and exponentiate so that the predictors are displayed as odds ratios
+```{r}
+penguin_final$.workflow[[1]] %>% 
+  tidy(exponentiate = T) %>% 
+  arrange(estimate)
+
+```
+
+
+
+
+
+
+
+
