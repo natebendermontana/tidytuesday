@@ -1,0 +1,148 @@
+---
+title: "Food Consumption"
+output: html_document
+date: "2024-10-31"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(tidymodels)
+library(countrycode)
+library(GGally)
+
+theme_set(theme_light())
+```
+
+```{r}
+food_raw <- readr::read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2020/2020-02-18/food_consumption.csv')
+
+# Consumption (kg/person/year)
+# Co2 Emission (Kg CO2/person/year)
+```
+
+```{r}
+food <- food_raw %>% 
+  mutate(continent = countrycode(country, origin = "country.name",
+                                 destination = "continent")) %>% 
+  select(-co2_emmission) %>% 
+  pivot_wider(names_from = food_category, 
+              values_from = consumption) %>% 
+  janitor::clean_names() %>% 
+  mutate(asia = case_when(continent == "Asia" ~ "Asia",
+                          TRUE ~ "Other")) %>% 
+  select(-country, -continent) %>% 
+  mutate_if(is.character, factor)
+
+food
+```
+
+```{r}
+ggscatmat(food, columns = 1:11, color = "asia", alpha = .6)
+
+```
+
+# Split the data for modeling
+```{r}
+food_split <- food %>% 
+  initial_split()
+
+training_set <- training(food_split)
+testing_set <- testing(food_split)
+
+
+```
+
+
+# Tuning hyperparameters
+```{r}
+set.seed(1234)
+food_boot <- bootstraps(training_set, times = 30)
+
+library(doMC)
+registerDoMC(cores = 4)
+
+# hyperparameters are just model parameters that cannot be learned from training the model on the data.
+# trees often don't have a huge effect, so ppl don't tune them that often. Just need to make sure you have enough
+# min_n: how many data points need to be on one side of a node before the model makes a decision on that node.
+
+rf_spec <-  rand_forest(mode = "classification",
+                        mtry = tune(),
+                        trees = 1000,
+                        min_n = tune()) %>%
+  set_engine("ranger")
+
+# workflow
+rf_workflow <- workflow() %>%
+  add_model(rf_spec) %>%
+  add_formula(asia ~ .)
+
+# set up control settings to allow verbosity (in-progress status messages) and parallel processing
+ctrl <- control_grid(
+  verbose = T,
+  allow_par = T
+)
+
+# train the models using the tuning grid
+rf_grid <- tune_grid(
+  rf_workflow,
+  resamples = food_boot,
+  control = ctrl
+)
+
+```
+
+
+```{r}
+rf_grid %>% 
+  collect_metrics()
+
+rf_grid %>% 
+  show_best(metric = "roc_auc")
+
+best_rf_model <- rf_grid %>% 
+  select_best(metric = "roc_auc")
+```
+
+```{r}
+final_rf_workflow <- rf_workflow %>%
+  finalize_workflow(best_rf_model)
+
+rf_fit <- final_rf_workflow %>%
+  fit(data = training_set)
+```
+
+
+```{r}
+results_train <- rf_fit %>% 
+  predict(new_data = training_set) %>% 
+  bind_cols(training_set) %>%
+  mutate(model = "rf")
+
+results_test <- rf_fit %>% 
+  predict(new_data = testing_set) %>% 
+  bind_cols(testing_set) %>%
+  mutate(model = "rf")
+
+```
+
+# Evaluate training and testing models
+```{r}
+# print metrics
+results_train %>%
+  metrics(truth = asia, estimate = .pred_class) 
+
+results_test %>%
+  metrics(truth = asia, estimate = .pred_class) 
+
+# visualize conf matrices
+results_train %>%
+  conf_mat(truth = asia, estimate = .pred_class) %>% 
+  autoplot(type = "heatmap")
+
+results_test %>%
+  conf_mat(truth = asia, estimate = .pred_class) %>% 
+  autoplot(type = "heatmap")
+
+```
+
