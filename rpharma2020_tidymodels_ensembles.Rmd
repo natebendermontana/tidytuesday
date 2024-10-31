@@ -1,0 +1,146 @@
+---
+title: "Stacked Ensemble Modeling"
+output: html_document
+date: "2024-10-31"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+theme_set(theme_light())
+library(klaR)
+library(tidymodels)
+library(stacks)
+library(rules)
+library(discrim)
+library(doMC)
+library(dplyr)
+```
+
+```{r}
+data(cells)
+cells_clean <- cells %>% 
+  dplyr::select(-case)
+```
+
+```{r}
+set.seed(1234)
+data_split <- initial_split(cells_clean, strata = "class")
+cell_train <- training(data_split)
+cell_test <- testing(data_split)
+```
+
+```{r}
+ranger_spec <- rand_forest(mtry = tune(),
+                           min_n = tune(),
+                           trees = 1000) %>% 
+  set_engine("ranger") %>% 
+  set_mode("classification")
+
+nb_recipe <- recipe(formula = class ~ ., data = cell_train) %>% 
+  step_YeoJohnson(all_predictors())
+
+nb_spec <- naive_Bayes(smoothness = tune()) %>% 
+  set_mode("classification") %>% 
+  set_engine("klaR")
+
+nb_workflow <- 
+  workflow() %>% 
+  add_recipe(nb_recipe) %>% 
+  add_model(nb_spec)
+
+```
+
+## Resampling / tuning the models
+```{r}
+registerDoMC(cores = 4)
+
+ctrl <- control_grid(save_workflow = T,
+                     save_pred = T,
+                     allow_par = T)
+
+set.seed(2453)
+folds <- vfold_cv(cell_train, v=10)
+perf_metrics <- metric_set(roc_auc)
+
+set.seed(41063)
+ranger_tune <- ranger_spec %>% 
+  tune_grid(
+    class ~ .,
+    resamples = folds,
+    grid = 10, 
+    metrics = perf_metrics,
+    control = ctrl
+  )
+
+set.seed(21575)
+nb_tune <- tune_grid(
+  nb_workflow,
+  resamples = folds,
+  grid = 10,
+  metrics = perf_metrics,
+  control = ctrl
+)
+```
+
+```{r}
+collect_metrics(ranger_tune, summarize = F)
+
+collect_predictions(ranger_tune) %>% 
+  arrange(.config, .row)
+
+```
+
+```{r}
+# collate out-of-samples predictions from the individual models
+st_preds <- 
+  stacks() %>% 
+  add_candidates(ranger_tune) %>% 
+  add_candidates(nb_tune)
+
+st_preds
+
+```
+
+```{r}
+# bring the member models into an ensemble model on the resampled data
+ens_model <- blend_predictions(st_preds)
+ens_model
+```
+
+```{r}
+autoplot(ens_model)
+autoplot(ens_model, type = "weights")
+```
+
+```{r}
+# Now fit the ensemble model on the testing data and make predictions
+ens_model_fit <- fit_members(ens_model)
+
+predictions <- ens_model_fit %>% 
+  predict(new_data = cell_test, type = "class", members = T) %>% 
+  bind_cols(cell_test)
+```
+
+```{r}
+# evaluate the ensemble model accuracy overall, and in relation to its component models
+predictions %>%
+  conf_mat(truth = class, estimate = .pred_class) %>% 
+  autoplot(type = "heatmap")
+
+# overall accuracy
+predictions %>%
+  metrics(truth = class, estimate = .pred_class)
+
+predictions %>%
+  metrics(truth = class, estimate = .pred_class_ranger_tune_1_04)
+
+predictions %>%
+  metrics(truth = class, estimate = .pred_class_ranger_tune_1_05)
+
+
+
+```
+
+
+
+
