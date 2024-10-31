@@ -1,0 +1,196 @@
+---
+title: "NFL Attendance"
+output: html_document
+date: "2024-10-31"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(tidymodels)
+theme_set(theme_light())
+```
+
+```{r}
+attendance <- readr::read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2020/2020-02-04/attendance.csv')
+standings <- readr::read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2020/2020-02-04/standings.csv')
+games <- readr::read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2020/2020-02-04/games.csv')
+
+attendance_joined <- attendance %>% 
+  left_join(standings,
+            by = c("year", "team_name", "team"))
+
+```
+
+## EDA
+```{r}
+attendance_joined %>% 
+  filter(!is.na(weekly_attendance)) %>% 
+  ggplot(aes(fct_reorder(team_name, weekly_attendance), weekly_attendance, fill = playoffs)) + 
+  geom_boxplot(outlier.alpha = .5) +
+  coord_flip()
+
+```
+
+```{r}
+attendance_joined %>% 
+  distinct(team_name, year, margin_of_victory, playoffs) %>% 
+  ggplot(aes(margin_of_victory, fill = playoffs)) + 
+  geom_histogram(position = "identity",alpha = .7)
+
+```
+
+```{r}
+attendance_joined %>% 
+  mutate(week = factor(week)) %>% 
+  ggplot(aes(week, weekly_attendance, fill = week)) + 
+  geom_boxplot(show.legend = F, outlier.alpha = .4) + 
+  coord_flip()
+
+```
+
+## build a df for modeling
+```{r}
+attendance_df <- attendance_joined %>% 
+  filter(!is.na(weekly_attendance)) %>% 
+  select(weekly_attendance, team_name, year, week, margin_of_victory, strength_of_schedule, playoffs)
+
+```
+
+```{r}
+set.seed(1234)
+
+attendance_split <- attendance_df %>% 
+  initial_split(strata = playoffs)
+
+training_set <- training(attendance_split)
+testing_set <- testing(attendance_split)
+
+```
+
+```{r}
+#linear regression
+lm_spec <- linear_reg() %>% 
+  set_engine("lm")
+
+lm_fit <- lm_spec %>% 
+  fit(weekly_attendance ~ ., 
+      data = training_set)
+
+lm_fit %>% 
+  tidy() %>% 
+  arrange(-estimate)
+
+
+```
+
+```{r}
+# random forest
+rf_spec <- rand_forest(mode = "regression") %>% 
+  set_engine("ranger")
+
+rf_fit <- rf_spec %>% 
+    fit(weekly_attendance ~ ., 
+      data = training_set)
+
+```
+
+# evaluate the models
+```{r}
+results_train <- lm_fit %>% 
+  predict(new_data = training_set) %>% 
+  mutate(truth = training_set$weekly_attendance, 
+         model = "lm") %>% 
+  bind_rows(rf_fit %>% 
+  predict(new_data = training_set) %>% 
+  mutate(truth = training_set$weekly_attendance, 
+         model = "rf"))
+
+results_test <- lm_fit %>% 
+  predict(new_data = testing_set) %>% 
+  mutate(truth = testing_set$weekly_attendance, 
+         model = "lm") %>% 
+  bind_rows(rf_fit %>% 
+  predict(new_data = testing_set) %>% 
+  mutate(truth = testing_set$weekly_attendance, 
+         model = "rf"))
+
+```
+
+```{r}
+results_train %>% 
+  group_by(model) %>% 
+  rmse(truth = truth, estimate = .pred)
+
+results_test %>% 
+  group_by(model) %>% 
+  rmse(truth = truth, estimate = .pred)
+
+```
+
+```{r}
+results_test %>% 
+  mutate(type = "testing") %>% 
+  bind_rows(results_train %>% 
+              mutate(type = "training")) %>% 
+  mutate(type = factor(type, levels = c("training", "testing"))) %>%
+  ggplot(aes(truth, .pred, color = model))+
+  geom_abline(lty = 2, color = "gray80", size = 1.5) +
+  geom_point(alpha = .5) +
+  facet_wrap(~type)
+```
+
+## let's try another approach with resampling to improve the rf model
+
+```{r}
+set.seed(2345)
+
+nfl_folds <- vfold_cv(training_set, strata = playoffs)
+
+rf_workflow <- workflow() %>%
+  add_model(rf_spec) %>%
+  add_formula(weekly_attendance ~ .)
+
+# Define the workflow
+rf_workflow <- workflow() %>%
+  add_model(rf_spec) %>%
+  add_formula(weekly_attendance ~ .)
+
+# Fit resamples with the workflow
+rf_results <- fit_resamples(
+  rf_workflow,
+  resamples = nfl_folds,
+  control = control_resamples(save_pred = TRUE)
+)
+
+```
+
+```{r}
+rf_results %>% 
+  collect_metrics()
+
+results_test %>% 
+  group_by(model) %>% 
+  rmse(truth = truth, estimate = .pred)
+
+```
+
+# Visualize the predictions
+```{r}
+rf_results %>% 
+  unnest(.predictions) %>% 
+  ggplot(aes(weekly_attendance, .pred, color = id)) + 
+  geom_abline(lty = 2, color = "gray80", size = 1.5) +
+  geom_point(alpha = .5)
+```
+
+
+
+
+
+
+
+
+
+
+
