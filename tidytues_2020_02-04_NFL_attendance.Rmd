@@ -8,6 +8,7 @@ date: "2024-10-31"
 knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
 library(tidymodels)
+library(ggthemes)
 theme_set(theme_light())
 ```
 
@@ -184,13 +185,105 @@ rf_results %>%
   geom_point(alpha = .5)
 ```
 
+# Additional work beyond the tutorial - exploring ggplot add'l packages
 
+```{r}
+library(ggfx)
+library(gghighlight)
 
+df_chart <- attendance_joined %>% 
+  select(team_name, weekly_attendance, week) %>% 
+  filter(!is.na(weekly_attendance)) %>%
+  group_by(team_name, week) %>% 
+  summarize(avg_attendance = mean(weekly_attendance)) %>%
+  ungroup()
 
+df_chart %>%
+  filter(week %in% c(1, 17)) %>%
+  pivot_wider(names_from = week, values_from = avg_attendance, names_prefix = "week_") %>%
+  mutate(discrepancy = abs(week_17 - week_1)) %>%
+  arrange(desc(discrepancy))
 
+df_static <- df_chart %>% 
+  filter(!team_name %in% c("Browns", "Eagles")) %>%
+  mutate(static_week = week) %>%  # Rename 'week' for static lines
+  select(-week)  # Remove original 'week' column
 
+df_animated <- df_chart %>% filter(team_name %in% c("Browns", "Eagles"))
 
+```
 
+```{r}
+library(ggrepel)
+library(gganimate)
+library(ggtext)
+
+browns_color <- "#c35d2f"
+eagles_color <- "#087f25"
+
+for_plot <- ggplot(df_animated, aes(x = week, y = avg_attendance, color = team_name)) +
+  ggthemes::theme_economist(base_size = 10) +
+  theme(plot.margin = margin(t = 2, l = 5, unit = 'mm')) +
+  
+  # Static lines for other teams (non-animated)
+  geom_line(aes(x = static_week), data = df_static, size = 1, show.legend = FALSE) +
+  
+  # Animated lines for Browns and Eagles
+  geom_line(size = 1.5, 
+    show.legend = FALSE) +  
+  
+  # Outer glow effect for Browns and Eagles
+  with_outer_glow(
+    geom_line(
+      data = df_animated %>% filter(team_name == "Browns"),
+      aes(x = week, y = avg_attendance), 
+      size = 1.5
+    ),
+    colour = "#fda77e",
+    sigma = 5,
+    expand = 2
+  ) +
+  with_outer_glow(
+    geom_line(
+      data = df_animated %>% filter(team_name == "Eagles"),
+      aes(x = week, y = avg_attendance), 
+      size = 1.5
+    ),
+    colour = "#03b32e",
+    sigma = 5,
+    expand = 2
+  ) +
+  
+  # Custom color scale
+  scale_color_manual(values = c("Browns" = browns_color, "Eagles" = eagles_color)) +
+  guides(color = "none") +
+  scale_y_continuous(labels = label_number(scale = 1 / 1e3, suffix = "k")) +
+  scale_x_continuous(breaks = unique(df_chart$week)) +
+  
+  # Axis labels and title
+  labs(
+    title = "Largest Average Attendance Difference, 2000 to 2019\n",
+    subtitle = '\nWeek: {sprintf("%.0f", frame_along)}',
+    x = "\nWeek",
+    y = "Attendance\n"
+  ) +
+  annotate(
+    "richtext",
+    x = 5,
+    y = 78000,
+label = sprintf('The <span style="color:%s;"><b>Eagles</b></span> saw the largest increase and the <span style="color:%s;"><b>Browns</b></span> saw the largest decrease.', eagles_color, browns_color),
+    hjust = 0, vjust = -1.1,
+    size = 5,
+    label.color = NA  # Remove label box outline
+  ) 
+
+for_plot
+```
+
+```{r}
+anim2 <- for_plot + transition_reveal(week)
+animate(anim2,nframes = 120, fps = 10, width = 1200, height = 600, end_pause = 40)
+```
 
 
 
