@@ -4,15 +4,22 @@ output: html_document
 date: "2024-10-25"
 ---
 
+## Lasso Regression
+
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(tidymodels)
+library(broom)
+library(glmnet)
+library(tidytext)
+library(Matrix)
+
+theme_set(theme_light())
 ```
 
 ```{r}
-library(tidyverse)
-
-theme_set(theme_light())
-
 board_games_raw <- readr::read_csv("https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2019/2019-03-12/board_games.csv")
 
 holdout_set <- board_games_raw %>% 
@@ -48,9 +55,6 @@ board_games %>%
   ggplot(aes(max_playtime / 60))+
   geom_histogram(binwidth = .25) + 
   scale_x_log10(breaks = 2^seq(-2,4))
-
-
-
 
 ```
 
@@ -91,7 +95,6 @@ board_games %>%
 
 
 ```{r}
-library(broom)
 lm(average_rating ~
      log2(max_players + 1) +
      log2(max_playtime + 1) +
@@ -129,10 +132,6 @@ features <- categorical_variables %>%
   mutate(value = 1) %>% 
   bind_rows(non_categorical_features)
 
-library(glmnet)
-library(tidytext)
-library(Matrix)
-
 # predictor
 
 feature_matrix <- features %>% 
@@ -154,7 +153,7 @@ cv_lasso$glmnet.fit %>%
   filter(lambda == cv_lasso$lambda.1se) %>% 
   arrange(desc(estimate)) %>% 
   filter(term != "(Intercept)") %>% 
-  top_n(25, abs(estimate)) %>% 
+  top_n(30, abs(estimate)) %>% 
   group_by(direction = ifelse(estimate <0, "Negative", "Positive")) %>% 
   mutate(term = fct_reorder(term, estimate)) %>% 
   ggplot(aes(term, estimate, fill = direction)) +
@@ -166,6 +165,90 @@ cv_lasso$glmnet.fit %>%
 ```
 
 
+## My additional exploration beyond the tutorial 
+### Testing the model
+```{r}
+# Step 2: Filter and prepare the holdout feature data as before
+holdout_categorical_features <- holdout_set %>%
+  select(game_id, name, family, category, artist, designer) %>%
+  gather(type, value, -game_id, -name) %>%
+  filter(!is.na(value)) %>%
+  separate_rows(value, sep = ",") %>%
+  unite(feature, type, value, sep = ": ") %>%
+  add_count(feature) %>%
+  filter(n >= 20) %>%
+  mutate(value = 1)
+
+holdout_non_categorical_features <- holdout_set %>%
+  transmute(
+    game_id, name, 
+    year = year_published - 1950, 
+    log2_max_players = log2(max_players + 1),
+    log2_max_playtime = log2(max_playtime + 1)
+  ) %>%
+  gather(feature, value, -game_id, -name)
+
+
+# Combine the categorical and non-categorical features for the holdout set
+holdout_features <- bind_rows(holdout_categorical_features, holdout_non_categorical_features)
+
+# Step 3: Create a sparse matrix for the holdout features
+holdout_feature_matrix <- holdout_features %>%
+  filter(feature %in% colnames(feature_matrix)) %>% # Only include features present in the training set
+  cast_sparse(game_id, feature, value)
+
+# Step 4: Add missing columns (features) from the training set to the holdout matrix with values set to zero
+missing_features <- setdiff(colnames(feature_matrix), colnames(holdout_feature_matrix))
+holdout_feature_matrix <- cbind(holdout_feature_matrix, Matrix(0, nrow = nrow(holdout_feature_matrix), ncol = length(missing_features)))
+colnames(holdout_feature_matrix) <- colnames(feature_matrix)
+
+# Step 2: Predict ratings for the holdout set
+predicted_ratings <- predict(cv_lasso, newx = holdout_feature_matrix, s = "lambda.1se")
+
+# Step 3: Calculate evaluation metrics
+# Extract actual ratings for holdout games
+actual_ratings <- holdout_set$average_rating[match(rownames(holdout_feature_matrix), holdout_set$game_id)]
+
+# Calculate MAE, MSE, and R-squared
+mae <- mean(abs(predicted_ratings - actual_ratings))
+mse <- mean((predicted_ratings - actual_ratings)^2)
+rsq <- 1 - sum((predicted_ratings - actual_ratings)^2) / sum((actual_ratings - mean(actual_ratings))^2)
+
+# Print the results
+cat("Mean Absolute Error (MAE):", mae, "\n")
+cat("Mean Squared Error (MSE):", mse, "\n")
+cat("R-squared:", rsq, "\n")
+
+```
+
+
+```{r}
+# Step 1: Generate predictions on the holdout set
+predicted_ratings <- predict(cv_lasso, newx = holdout_feature_matrix, s = "lambda.1se")
+
+# Step 2: Prepare a data frame with actual and predicted ratings, and calculate residuals
+performance_data <- data.frame(
+  actual = actual_ratings,
+  predicted = as.vector(predicted_ratings)
+) %>%
+  mutate(residual = predicted - actual)  # Calculate residual
+
+ggplot(performance_data, aes(x = actual, y = predicted, color = residual)) +
+  geom_point(alpha = 1) +
+  #geom_abline(intercept = 0, slope = 1, color = "black", linetype = "dashed") +
+  scale_color_gradient2(low = "blue", mid = "grey", high = "red", midpoint = 0) +
+  labs(
+    title = "Actual vs. Predicted Board Game Ratings",
+    x = "Actual Rating",
+    y = "Predicted Rating",
+    color = "Residual\n(Predicted - Actual)"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5)
+  )
+
+```
 
 
 
