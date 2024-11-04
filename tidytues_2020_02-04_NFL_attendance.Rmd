@@ -281,8 +281,167 @@ for_plot
 ```
 
 ```{r}
-anim2 <- for_plot + transition_reveal(week)
-animate(anim2,nframes = 120, fps = 10, width = 1200, height = 600, end_pause = 40)
+#anim2 <- for_plot + transition_reveal(week)
+#animate(anim2,nframes = 120, fps = 10, width = 1200, height = 600, end_pause = 40)
+```
+
+
+### Add'l work beyond tutorial - workflowsets
+
+```{r}
+
+attendance_formodel <- attendance_joined %>% 
+    filter(!is.na(weekly_attendance))
+
+attendance_split <- initial_split(attendance_formodel)
+attendance_trainingset <- training(attendance_split)
+attendance_testingset <- testing(attendance_split)
+
+```
+
+```{r}
+recipe_base <- recipe(weekly_attendance ~ ., data=attendance_trainingset) %>% 
+  step_rm(team) %>% # remove the other response and ID vars
+  step_nzv(all_predictors()) %>%  # remove near-zero variance EVs
+  step_zv(all_predictors()) %>%  # remove near-zero variance EVs
+  step_corr(all_numeric_predictors()) %>%  # remove highly correlated vars
+  step_normalize(all_numeric_predictors()) %>% 
+  step_dummy(all_nominal(), one_hot = T) %>% 
+  step_impute_knn()
+
+recipe_base %>% prep() %>% juice() %>% glimpse()
+
+recipe_full <- recipe_base  %>% 
+  step_impute_mean(all_numeric_predictors())
+
+recipe_full %>% prep() %>% juice() %>% glimpse()
+```
+
+
+```{r}
+library(workflowsets)
+# Glmnet model
+glmnet_spec <- linear_reg(penalty = tune(), mixture = tune()) %>% 
+  set_engine("glmnet")
+
+# xgboost
+xgboost_spec <- boost_tree(
+  mode = "regression",
+  trees = 500,
+  learn_rate = tune(),
+  min_n = tune()
+) %>% 
+  set_engine("xgboost")
+
+# SVM
+svm_spec <- svm_rbf(
+  cost = tune(),
+  rbf_sigma = tune(),
+  margin = tune()) %>% 
+  set_engine("kernlab") %>% 
+  set_mode("regression")
+
+# resamples
+resample_spec <- vfold_cv(attendance_trainingset, v = 5)
+#registerDoMC(cores = 4)
+
+workflow_setup <- workflow_set(
+  preproc = list(
+    base = recipe_base,
+    full = recipe_full
+  ),
+  models = list(
+    glmnet = glmnet_spec,
+    xgboost = xgboost_spec,
+    svm = svm_spec
+  ),
+  cross = T
+)
+
+workflow_setup
+
+library(parallel)
+library(doParallel)
+library(finetune)
+library(xgboost)
+library(lme4)
+cores <- parallel::detectCores(logical = F)
+cores
+clusters <- makePSOCKcluster(cores-2)
+registerDoParallel(clusters)
+
+set.seed(123)
+if (exists("workflowset_tune_results")) rm("workflowset_tune_results")
+workflowset_tune_results <- workflow_setup %>% 
+  workflow_map(
+    fn = "tune_race_anova",
+    resamples = resample_spec,
+    grid = 15,
+    metrics = metric_set(rmse, rsq),
+    verbose = T
+  )
+
+doParallel::stopImplicitCluster()
+library(readr)
+
+#workflowset_tune_results %>% 
+#  write_rds("01_results/workflowset_tune_results.rds")
+#workflowset_tune_results <- read_rds("01_results/workflowset_tune_results.rds")
+
+autoplot(workflowset_tune_results)
+
+# autoplot(workflowset_tune_results) + 
+#   scale_color_tq() + 
+#   theme_tq()
+
+workflowset_tune_results %>% 
+  rank_results(rank_metric = "rmse") %>% 
+  filter(.metric == "rmse")
+
+autoplot(workflowset_tune_results, id = "base_glmnet", metric = "rmse")
+
+```
+
+# Finalize best model
+```{r}
+# get the parameters of the best model
+params_bestmodel <- workflowset_tune_results %>% 
+  pull_workflow_set_result(id = "base_glmnet") %>% 
+  select_best(metric = "rmse")
+
+# fit to the testing data
+workflow_fit_final <- workflowset_tune_results %>% 
+  pull_workflow("base_glmnet") %>% 
+  finalize_workflow(params_bestmodel) %>% 
+  fit(attendance_testingset)
+
+workflow_fit_final
+
+# make predictions
+predictions_tbl <- workflow_fit_final %>% 
+  predict(new_data = attendance_testingset) %>% 
+  mutate(truth = attendance_testingset$weekly_attendance,
+         model = "glm")
+
+```
+
+```{r}
+predictions_tbl %>% 
+  ggplot(aes(truth, .pred)) + 
+  geom_point() + 
+  geom_abline(slope = 1, intercept = 0, color = "grey")
+
+```
+
+```{r}
+library(vip)
+
+importance_tbl <- vip::vi(workflow_fit_final$fit$fit$fit)
+importance_tbl
+
+importance_tbl %>% 
+  ggplot(aes(Importance, fct_reorder(Variable, Importance), fill = Sign)) + 
+  geom_col()
 ```
 
 
