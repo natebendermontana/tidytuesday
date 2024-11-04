@@ -1,0 +1,179 @@
+---
+title: "Giant Pumpkins"
+output: html_document
+date: "2024-11-04"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(tidymodels)
+library(earth)
+update_geom_defaults("rect", list(fill = "midnightblue", alpha = 0.8))
+
+theme_set(theme_light())
+```
+
+```{r}
+pumpkins_raw <- readr::read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2021/2021-10-19/pumpkins.csv')
+```
+
+```{r}
+pumpkins <- pumpkins_raw %>% 
+  separate(id, into = c("year", "type")) %>% 
+  filter(type == "P") %>% 
+  mutate(across(c(year, weight_lbs, ott, place), parse_number)) %>% 
+  select(weight_lbs, ott, year, place, gpc_site, country)
+  
+```
+
+```{r}
+pumpkins %>% 
+  filter(ott < 1e3, ott > 10) %>% 
+  ggplot(aes(ott, weight_lbs, color = place)) + 
+  geom_point(alpha =.1, size = 1.1) + 
+  labs(x = "over the top inches",
+       y = "weight (lbs)") + 
+  scale_color_viridis_c()
+
+```
+
+```{r}
+# are pumpkins getting heavier with age? maybe
+pumpkins %>% 
+  filter(ott < 1e3, ott > 20) %>% 
+  ggplot(aes(ott, weight_lbs, color = "grey")) + 
+  geom_point(alpha =.1, size = 1.1) + 
+  geom_smooth(aes(color = factor(year)),
+              method = "lm", formula = y ~ splines::bs(x, 3),
+              se = F, size = 1.5, alpha = .6) +
+  labs(x = "over the top inches",
+       y = "weight (lbs)", color = NULL) + 
+  scale_colour_viridis_d()
+
+```
+
+```{r}
+# are pumpkins getting heavier with age? maybe
+pumpkins %>% 
+  mutate(country = fct_lump(country, n=10),
+         country = fct_reorder(country, weight_lbs)) %>% 
+  ggplot(aes(country, weight_lbs, color = country))+
+  geom_boxplot() +
+  geom_jitter(alpha=.1, width = .15)+
+  theme(legend.position = "none") +
+  labs(x = NULL, y = "weight lbs") + 
+  coord_flip()
+
+```
+
+# Build and fit a workflowset
+```{r}
+set.seed(123)
+
+pumpkins_split <- pumpkins %>% 
+  filter(ott < 1e3, ott > 20) %>% 
+  initial_split(strata = weight_lbs)
+
+pumpkins_train <- training(pumpkins_split)
+pumpkins_test <- testing(pumpkins_split)
+
+set.seed(234)
+pumpkin_folds <- vfold_cv(pumpkins_train, strata = weight_lbs)
+
+```
+
+# A workflowset allows us to combine different preprocessors and models and train & test them all at once
+```{r}
+base_rec <- recipe(weight_lbs ~ ott + year + country + gpc_site, 
+                   data = pumpkins_train) %>% 
+  step_other(country, gpc_site, threshold = .02)
+
+base_rec %>%  prep() %>% bake(new_data = NULL)
+
+ind_rec <- base_rec %>% 
+  step_dummy(all_nominal_predictors())
+
+spline_rec <- ind_rec %>% 
+  step_bs(ott)
+
+
+```
+
+```{r}
+# tree-based model
+rf_spec <- rand_forest(trees = 1e3) %>% 
+  set_mode("regression") %>% 
+  set_engine("ranger")
+
+# multivariate adaptive regression splines
+mars_spec <- mars() %>% 
+  set_mode("regression") %>% 
+  set_engine("earth")
+
+# linear regression model
+lm_spec <- linear_reg()
+
+```
+
+# set up workflowset
+```{r}
+pumpkin_set <- workflow_set(list(base_rec, ind_rec, spline_rec),
+             list(rf_spec, mars_spec, lm_spec),
+             cross = F)
+
+```
+
+```{r}
+doParallel::registerDoParallel()
+set.seed(345)
+
+pumpkin_results <- workflow_map(
+  pumpkin_set,
+  "fit_resamples",
+  resamples = pumpkin_folds)
+
+pumpkin_results
+```
+
+```{r}
+autoplot(pumpkin_results)
+
+```
+
+```{r}
+collect_metrics(pumpkin_results)
+```
+
+```{r}
+final_fit <- extract_workflow(pumpkin_results, "recipe_3_linear_reg") %>% 
+  fit(pumpkins_train)
+
+tidy(final_fit) %>% arrange(-abs(estimate))
+```
+
+```{r}
+predictions_tbl <- final_fit %>% 
+  predict(new_data = pumpkins_test) %>% 
+  mutate(truth = pumpkins_test$weight_lbs,
+         model = "lm")
+
+predictions_tbl %>% 
+  ggplot(aes(truth, .pred)) + 
+  geom_point() + 
+  geom_abline(slope = 1, intercept = 0, color = "grey")
+
+```
+
+```{r}
+rmse_result <- predictions_tbl %>%
+  rmse(truth = truth, estimate = .pred) %>% 
+  pull(.estimate)
+
+```
+We can predict pumpkin weight within plus or minus `r round(rmse_result, 0)` pounds, on average.
+
+
+
+
