@@ -34,7 +34,7 @@ df_raw %>%
 
 ```
 
-# Building a model to predict penguin sex
+# Building a model to predict sex of penguins
 ```{r}
 df_penguins <- df_raw %>% 
   filter(!is.na(sex)) %>% 
