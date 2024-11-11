@@ -10,6 +10,7 @@ knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
 library(tidymodels)
 library(earth)
+library(doParallel)
 update_geom_defaults("rect", list(fill = "midnightblue", alpha = 0.8))
 
 theme_set(theme_light())
@@ -98,6 +99,14 @@ ind_rec <- base_rec %>%
 spline_rec <- ind_rec %>% 
   step_bs(ott)
 
+xgboost_rec <- base_rec %>%  
+  #step_novel(all_nominal_predictors(), -all_outcomes()) %>%  # Handle unseen levels by marking them as "novel"
+  #step_corr(all_numeric_predictors()) %>%
+  #step_unknown(all_nominal_predictors(), -all_outcomes()) %>% 
+  step_dummy(all_nominal(), -all_outcomes()) %>% 
+  step_impute_mean(all_numeric_predictors()) %>% # simple impute mean for now
+  step_zv(all_predictors()) %>% 
+  step_normalize(all_numeric())
 
 ```
 
@@ -115,18 +124,47 @@ mars_spec <- mars() %>%
 # linear regression model
 lm_spec <- linear_reg()
 
+######### Addl models beyond the tutorial
+# lasso regression
+lasso_spec <- linear_reg(
+  penalty = tune(),
+  mixture = 1       # 1 for LASSO, 0 for Ridge, between 0-1 for Elastic Net
+) %>% 
+  set_engine("glmnet") %>% 
+  set_mode("regression")
+
+# xgboost
+xgboost_spec <- boost_tree(
+  trees = 1000
+) %>% 
+  set_mode("regression") %>% 
+  set_engine("xgboost")
+
+
 ```
 
 # set up workflowset
 ```{r}
-pumpkin_set <- workflow_set(list(base_rec, ind_rec, spline_rec),
-             list(rf_spec, mars_spec, lm_spec),
+pumpkin_set <- workflow_set(
+  list(
+    base_rec, 
+    ind_rec, 
+    spline_rec,
+    #base_rec,
+    xgboost_rec),
+  list(
+    rf_spec, 
+    mars_spec, 
+    lm_spec,
+    #lasso_spec,
+    xgboost_spec),
              cross = F)
 
 ```
 
 ```{r}
-doParallel::registerDoParallel()
+cores <- parallel::detectCores()
+doParallel::registerDoParallel(cores-1)
 set.seed(345)
 
 pumpkin_results <- workflow_map(
@@ -147,7 +185,7 @@ collect_metrics(pumpkin_results)
 ```
 
 ```{r}
-final_fit <- extract_workflow(pumpkin_results, "recipe_3_linear_reg") %>% 
+final_fit <- extract_workflow(pumpkin_results, "recipe_4_boost_tree") %>% 
   fit(pumpkins_train)
 
 tidy(final_fit) %>% arrange(-abs(estimate))
@@ -157,7 +195,7 @@ tidy(final_fit) %>% arrange(-abs(estimate))
 predictions_tbl <- final_fit %>% 
   predict(new_data = pumpkins_test) %>% 
   mutate(truth = pumpkins_test$weight_lbs,
-         model = "lm")
+         model = "xg")
 
 predictions_tbl %>% 
   ggplot(aes(truth, .pred)) + 
@@ -171,6 +209,7 @@ rmse_result <- predictions_tbl %>%
   rmse(truth = truth, estimate = .pred) %>% 
   pull(.estimate)
 
+round(rmse_result, 0)
 ```
 We can predict pumpkin weight within plus or minus `r round(rmse_result, 0)` pounds, on average.
 
