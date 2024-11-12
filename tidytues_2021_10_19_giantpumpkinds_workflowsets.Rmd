@@ -11,8 +11,8 @@ library(tidyverse)
 library(tidymodels)
 library(earth)
 library(doParallel)
-update_geom_defaults("rect", list(fill = "midnightblue", alpha = 0.8))
 
+update_geom_defaults("rect", list(fill = "midnightblue", alpha = 0.8))
 theme_set(theme_light())
 ```
 
