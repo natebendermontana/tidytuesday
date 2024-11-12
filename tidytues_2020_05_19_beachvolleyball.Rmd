@@ -19,6 +19,7 @@ update_geom_defaults("rect", list(fill = "midnightblue", alpha = 0.8))
 theme_set(theme_light())
 ```
 
+# Julia Silge tutorial
 ```{r}
 volleyball_raw <- readr::read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2020/2020-05-19/vb_matches.csv', guess_max = 76000)
 ```
@@ -131,14 +132,216 @@ xgb_res <- tune_grid(
   xgb_wf,
   resamples = vb_folds,
   grid = xgb_grid,
-  control = control_grid(verbose = T, save_pred = T)
+  control = control_grid(save_pred = T)
 )
 tictoc::toc()
 
 ```
 
+```{r}
+xgb_res %>% 
+  collect_metrics() %>%
+  filter(.metric == "roc_auc") %>% 
+  select(mean, mtry:sample_size) %>% 
+  pivot_longer(mtry:sample_size, names_to = "parameter", values_to = "value") %>% 
+  ggplot(aes(value, mean, color = parameter)) + 
+  geom_point(show.legend = F) +
+  labs(y = "roc_auc") +
+  facet_wrap(~parameter, scales = "free_x") 
+
+```
+
+```{r}
+show_best(xgb_res)
+
+best_auc <- select_best(xgb_res, metric = "roc_auc")
+
+final_xgb <- finalize_workflow(
+  xgb_wf,
+  best_auc
+)
+```
+
+```{r}
+library(vip)
+
+final_xgb %>% 
+  fit(data = vb_train) %>% 
+  pull_workflow_fit() %>% 
+  vip(geom = "point")
+```
+
+```{r}
+final_res <- last_fit(final_xgb, vb_split)
+
+final_res %>% 
+  collect_metrics()
+```
+
+```{r}
+# look at the predictions on the testing data
+
+final_res %>% 
+  collect_predictions() %>% 
+  conf_mat(win, .pred_class)
+
+final_res %>% 
+  collect_predictions() %>% 
+  roc_curve(win, .pred_win) %>% 
+  autoplot()
+  
+
+```
 
 
 
+# David Robinson tutorial
+```{r}
+vb_matches <- volleyball_raw
+
+vb_long <- vb_matches %>%
+  rename(w_p1_name = w_player1, w_p2_name = w_player2,
+         l_p1_name = l_player1, l_p2_name = l_player2,
+         w_team_rank = w_rank, l_team_rank = l_rank) %>%
+  mutate_at(vars(starts_with("w_"), starts_with("l_")), as.character) %>%
+  pivot_longer(cols = c(starts_with("w_"), starts_with("l_"))) %>%
+  separate(name, c("winner_loser", "player", "name"),
+           sep = "_",
+           extra = "merge",
+           fill = "right") %>%
+  mutate(winner_loser = str_to_upper(winner_loser))
+
+vb_player_matches <- vb_long %>%
+  filter(name != "rank") %>%
+  spread(name, value) %>%
+  type_convert()
+```
+
+```{r}
+vb_sets <- vb_matches %>%
+  select(match_id, circuit:match_num, score) %>%
+  separate_rows(score, sep = ", ") %>%
+  mutate(score = str_remove(score, " retired")) %>%
+  mutate(score = na_if(score, "Forfeit or other")) %>%
+  separate(score, c("w_score", "l_score"), convert = TRUE)
+```
+
+```{r}
+by_player <- vb_player_matches %>%
+  group_by(name, gender) %>%
+  summarize(n_matches = n(),
+            pct_winner = mean(winner_loser == "W"),
+            first_game = min(date),
+            last_game = max(date)) %>%
+  arrange(desc(n_matches)) %>%
+  ungroup()
+
+by_player %>%
+  filter(n_matches >= 200) %>%
+  ggplot(aes(n_matches, pct_winner, color = gender)) +
+  geom_point() +
+  scale_x_log10() +
+  scale_y_continuous(labels = percent) +
+  labs(x = "# of matches since 2000 (log scale)",
+       y = "% of matches won")
+
+# women
+by_player %>%
+  filter(n_matches >= 200,
+         gender == "W") %>%
+  arrange(desc(pct_winner)) %>% 
+  slice_head(n=10)
+
+# men
+by_player %>%
+  filter(n_matches >= 200,
+         gender == "M") %>%
+  arrange(desc(pct_winner)) %>% 
+  slice_head(n=10)
+```
+
+```{r}
+vb_player_matches %>%
+  summarize_all(~ mean(!is.na(.))) %>%
+  gather() %>%
+  View()
+```
+
+# First year performance
+
+```{r}
+summarize_players <- . %>%
+  summarize(n_matches = n(),
+            pct_winner = mean(winner_loser == "W"),
+            avg_attacks = mean(tot_attacks, na.rm = TRUE),
+            avg_errors = mean(tot_errors, na.rm = TRUE),
+            avg_serve_errors = mean(tot_serve_errors, na.rm = TRUE),
+            avg_kills = mean(tot_kills, na.rm = TRUE),
+            avg_aces = mean(tot_aces, na.rm = TRUE),
+            n_with_data = sum(!is.na(tot_attacks))) %>%
+  ungroup() %>%
+  arrange(desc(n_matches))
+
+players_before_2019 <- vb_player_matches %>%
+  filter(year < 2019) %>%
+  group_by(name, gender, hgt, birthdate, country) %>%
+  summarize_players() %>%
+  filter(!is.na(avg_attacks))
+
+```
+
+```{r}
+players_before_2019 %>% 
+  filter(n_with_data >= 20) %>% 
+  ggplot(aes(avg_serve_errors, avg_aces, size = n_with_data)) + 
+  geom_point() + 
+  labs(size = "Games")
+```
+
+
+```{r}
+players_2019 <- vb_player_matches %>%
+  filter(year == 2019) %>%
+  group_by(name, gender, hgt, birthdate, country, year,
+           age = year - year(birthdate)) %>%
+  summarize_players()
+
+players_2019
+
+```
+
+```{r}
+players_2019 %>% 
+  filter(n_with_data >= 20) %>% 
+  ggplot(aes(avg_serve_errors, avg_aces, size = n_with_data)) + 
+  geom_point() + 
+  labs(size = "Games")
+```
+
+
+```{r}
+performance_joined <- players_before_2019 %>%
+  inner_join(players_2019 %>%
+               select(name, n_matches, pct_winner),
+             by = "name",
+             suffix = c("", "_2019"))
+
+performance_joined %>%
+  filter(n_matches >= 10,
+         n_matches_2019 >= 5) %>%
+  ggplot(aes(pct_winner, pct_winner_2019)) +
+  geom_point() +
+  geom_abline(color = "red") +
+  geom_smooth(method = "lm")
+
+performance_joined %>%
+  mutate(n_wins_2019 = n_matches_2019 * pct_winner_2019,
+         country = fct_lump(country, 3)) %>%
+  glm(cbind(n_wins_2019, n_matches_2019 - n_wins_2019) ~
+        pct_winner + avg_errors + avg_serve_errors,
+      data = .,
+      family = "binomial") %>%
+  summary()
+```
 
 
