@@ -33,10 +33,10 @@ survivalists <- readr::read_csv('https://raw.githubusercontent.com/rfordatascien
 #create new column for status
 survivalists <- survivalists %>% 
   mutate(status = case_when(reason_category=="Family / personal" ~ "Out - Personal",
-                                          reason_category=="Medical / health" ~ "Out - Medical",
-                                          result==1 ~ "Winner",
-                                          TRUE ~ "Out - Loss of Inventory")
-)
+                            reason_category=="Medical / health" ~ "Out - Medical",
+                            result==1 ~ "Winner",
+                            TRUE ~ "Out - Loss of Inventory")
+  )
 
 #create aggregates by gender
 summary <- survivalists %>% 
@@ -65,7 +65,7 @@ ggplot(data=survivalists)+
              size=6) + 
   geomtextpath::geom_texthline(yintercept = mean(survivalists$days_lasted), color="grey20", linewidth=0.4, linetype="dashed",
                                label = glue("Avg: {round(mean(survivalists$days_lasted),0)} Days"),
-                                hjust = 0.05, vjust=-0.5, family='rs',
+                               hjust = 0.05, vjust=-0.5, family='rs',
                                size=3) + 
   geom_point(data=summary, mapping=aes(x=gender, y=avg_days_lasted), size=4.5, shape=23, fill="black", color="white")+
   scale_fill_manual(values=rev(c("#FBB13C","#9AADBF","#C3423F","#2B4162")))+
@@ -81,9 +81,9 @@ ggplot(data=survivalists)+
     title = "On average, female survivalists outlast their male counterparts",
     subtitle = subtitle,
     caption = caption, 
-       x="",
-       y="Days Lasted",
-       fill="Survivalist Status")+
+    x="",
+    y="Days Lasted",
+    fill="Survivalist Status")+
   theme(text = element_text(family="rs"),
         axis.ticks = element_blank(),
         legend.position="top",
@@ -207,7 +207,7 @@ theme_update(
   text = element_text(color = "black", size = 55),
   plot.background = element_rect(fill = "#f5f5f2", color = NA), 
   panel.background = element_rect(fill = "#f5f5f2", color = NA), 
-legend.title.align=0.5,
+  legend.title.align=0.5,
   plot.title = element_text(
     color = "black", 
     size = 68, 
@@ -334,7 +334,7 @@ p <- p +
              nudge_x = 0.05, nudge_y = 2,
              label.padding = unit(0.2, "lines"), 
              label.size = NA, fill='#f5f5f2', color='#9986A5') 
-  #annotation_custom(xmin=-Inf, ymin=-Inf, xmax=Inf, ymax=Inf, rasterGrob(w)) 
+#annotation_custom(xmin=-Inf, ymin=-Inf, xmax=Inf, ymax=Inf, rasterGrob(w)) 
 
 p
 ```
@@ -453,7 +453,7 @@ ridges <-
   group_by(item) %>% 
   mutate(avg_days_lasted = mean(days_lasted)) %>% 
   ungroup() %>% 
-    mutate(
+  mutate(
     item = fct_lump_min(item, min = 5),
     item = fct_reorder(item, avg_days_lasted),
   )
@@ -498,7 +498,7 @@ items_plot <- ridges %>%
   geom_col(alpha = 0.8, show.legend = T) +
   #geom_label(aes(label = round(avg_days_lasted, 0)), size = 3) +  
   scale_fill_viridis_d(option = "inferno", direction = 1,
-                           limits = levels(ridges$n_category)) + 
+                       limits = levels(ridges$n_category)) + 
   guides(
     fill = guide_legend(reverse = TRUE)  # Reverse the legend order
   ) +
@@ -518,8 +518,8 @@ ridges_plot + items_plot
 Cluster analysis of loadouts.
 ```{r}
 df_clusters <- full_join(survivalists, 
-                     loadouts, 
-                     by = c("season", "name"))
+                         loadouts, 
+                         by = c("season", "name"))
 
 ```
 
@@ -601,8 +601,6 @@ item_diff <- item_matrix %>%
     diff = !!sym(as.character(longest_cluster)) - !!sym(as.character(shortest_cluster))  # Difference
   )
 
-
-
 item_diff %>%
   ggplot(aes(x = reorder(item, diff), y = diff, fill = diff > 0)) +
   geom_col(show.legend = FALSE, alpha = 0.8) +
@@ -613,14 +611,122 @@ item_diff %>%
     x = "Item",
     y = "Difference"
   ) +
-  theme_minimal()
+  theme_minimal()+
+  theme(text = element_text(family="rs"),
+        axis.ticks = element_blank(),
+        axis.line.x = element_line(linewidth=0.5, color="black"),
+        panel.background = element_blank(),
+        plot.title = element_textbox_simple(face="bold", size=15, margin = margin(b=10, t=10), width = grid::unit(6.75, "in"),
+                                            halign=0, hjust=0.15),
+        plot.subtitle = element_textbox_simple( width = grid::unit(6.75, "in"), halign=0, hjust=0.15),
+        plot.caption = element_textbox_simple(color="black"),
+        #panel.grid = element_blank(), 
+        panel.grid.major.x = element_line(linewidth=0.2, color='grey90'),
+        legend.key = element_blank())
+
+```
+
+Side by side difference plot with the items in the middle for legibility
+```{r}
+library(ggpubr)
+axis_margin <- 10
+
+odds_ratios <- item_diff %>% 
+  mutate(longest = `2`,
+         shortest = `1`,
+         .keep = "unused",    
+         odds_longest = (longest + 1e-6) / (1 - longest + 1e-6),  # Odds for longest group
+         odds_shortest = (shortest + 1e-6) / (1 - shortest + 1e-6), # Odds for shorter group
+         odds_ratio = odds_longest / odds_shortest,  # Odds ratio
+         log_odds_ratio = ifelse(odds_shortest == 0 | odds_longest == 0, NA, log(odds_ratio)),  # Log odds ratio
+         odds_ratio_label = ifelse(is.na(log_odds_ratio), "Infinite", sprintf("%.2f", odds_ratio)),
+         item = fct_reorder(item, log_odds_ratio, .na_rm = FALSE)   # Order items by log odds ratio
+  )
+
+multitool_odds <- odds_ratios %>% 
+  filter(item == "Multitool") %>% 
+  pull(odds_ratio) %>% 
+  round(., 0)
+
+rations_odds_inverted <- odds_ratios %>%
+  filter(item == "Rations") %>%
+  pull(odds_ratio) %>%
+  {1 / .} %>% 
+  round(., 0)
+
+df_split_forplot <- item_diff %>%
+  mutate(
+    posdiff = ifelse(diff > 0, diff, 0), 
+    negdiff = ifelse(diff < 0, diff, 0)  
+  ) %>%
+  mutate(
+    item = fct_reorder(item, -posdiff, .desc = TRUE) %>%  # Reorder by posdiff first
+      fct_reorder(negdiff)  # Then reorder by negdiff for items with posdiff = 0
+  ) %>%
+  arrange(desc(posdiff), negdiff) %>%  # Ensure correct order
+  select(item, posdiff, negdiff)
+
+p_left <- ggplot(df_split_forplot, aes(x = negdiff, y = item)) +
+  geom_col(fill = "#2B4162", alpha = 0.8) +  # Dark blue for negative bars
+  #scale_x_reverse() +  # Flip x-axis
+  scale_y_discrete(position = "right") +  # Move y-axis to the right
+  labs(x = "") +
+  theme_minimal() +
+  theme(
+    text = element_text(family="rs"),
+    axis.line.x = element_line(linewidth=0.5, color="black"),
+    axis.text.y = element_blank(),  # Remove y-axis labels
+    axis.title.y = element_blank(),  # Remove y-axis title
+    plot.margin = margin(axis_margin, 0, axis_margin, axis_margin)
+  ) + 
+  geom_curve(
+  aes(x = -.1, y = "Trapping wire", xend = 0, yend = "Multitool"),
+  curvature = -0.3,
+  arrow = arrow(length = unit(0.2, "cm")),
+  color = "grey20"
+) +
+  annotate("text", x = -.25, y = "Bow and arrows", label = glue("The longest-surviving contestants were {multitool_odds} times\n more likely to include a multitool in their kit than the shorter-surviving group."), 
+           color = "grey20",
+           size = 2)
+
+p_right <- ggplot(df_split_forplot, aes(x = posdiff, y = item)) +
+  geom_col(fill = "#C3423F", alpha = 0.8) +  # Red for positive bars
+  labs(x = "") +
+  theme_minimal() +
+  theme(
+    text = element_text(family="rs"),
+    axis.line.x = element_line(linewidth=0.5, color="black"),
+    axis.ticks = element_blank(),
+    panel.background = element_blank(),
+    axis.title.y = element_blank(),  # Remove y-axis title
+    axis.text.y.left = element_text(margin = margin(0, axis_margin, 0, axis_margin), hjust = .5),
+    plot.margin = margin(axis_margin, axis_margin, axis_margin, 0)
+  )
+
+combined_figure <- ggpubr::ggarrange(
+  p_left, p_right, 
+  ncol = 2,  
+  widths = c(1, 1)
+)
+
+annotate_figure(
+  combined_figure,
+  top = text_grob(
+    "What items do the longest-surviving contestants choose more often than those who don't last?\n",
+    face = "bold",
+    size = 14
+  ))
 
 ```
 
 
 
-
-
-
-
-
+    
+    
+    
+    
+    
+    
+    
+    
+    
