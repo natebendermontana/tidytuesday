@@ -1,0 +1,626 @@
+---
+title: "TidyTues Alone"
+output: html_document
+date: "2024-11-25"
+---
+
+# Replicating chart from Tanya Shapiro
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(ggbeeswarm)
+library(geomtextpath)
+library(glue)
+library(sysfonts)
+library(showtext)
+library(ggrepel)
+library(ggtext)
+```
+
+```{r}
+sysfonts::font_add_google("Roboto Slab","rs")
+showtext::showtext_auto()
+showtext_opts(dpi=300)
+# sysfonts::font_add('Font Awesome 6 Brands', 'fonts/Font Awesome 6 Brands-Regular-400.otf')
+
+#import code for social caption
+#source("social-caption.R")
+
+#import data
+survivalists <- readr::read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2023/2023-01-24/survivalists.csv')
+
+#create new column for status
+survivalists <- survivalists %>% 
+  mutate(status = case_when(reason_category=="Family / personal" ~ "Out - Personal",
+                                          reason_category=="Medical / health" ~ "Out - Medical",
+                                          result==1 ~ "Winner",
+                                          TRUE ~ "Out - Loss of Inventory")
+)
+
+#create aggregates by gender
+summary <- survivalists %>% 
+  group_by(gender) %>% 
+  summarise(survivalists=n(),
+            avg_days_lasted = mean(days_lasted),
+            median_days_lasted = median(days_lasted))
+
+#create plot subtitle + caption
+subtitle = "Analysis of survivalists competing on the US reality TV series, **Alone**, across all seasons (1-9). Comparison of days lasted by gender. Although the show has yet to crown a female winner, on average as a group, female survivalists last 13 days longer than male competitors."
+#use custom social caption function to generate html for plot caption (used with ggtext)
+caption = paste0("Source: {alone}<br>")
+
+rolandwelker <- survivalists %>% 
+  filter(name == "Roland Welker") %>% 
+  pull(days_lasted)
+
+callierussell <- survivalists %>% 
+  filter(name == "Callie Russell") %>% 
+  pull(days_lasted)
+
+ggplot(data=survivalists)+
+  geom_point(mapping=aes(y=days_lasted, x=gender, fill=status), 
+             color="white", shape=21,
+             position = position_beeswarm(cex=4.5),
+             size=6) + 
+  geomtextpath::geom_texthline(yintercept = mean(survivalists$days_lasted), color="grey20", linewidth=0.4, linetype="dashed",
+                               label = glue("Avg: {round(mean(survivalists$days_lasted),0)} Days"),
+                                hjust = 0.05, vjust=-0.5, family='rs',
+                               size=3) + 
+  geom_point(data=summary, mapping=aes(x=gender, y=avg_days_lasted), size=4.5, shape=23, fill="black", color="white")+
+  scale_fill_manual(values=rev(c("#FBB13C","#9AADBF","#C3423F","#2B4162")))+
+  scale_x_discrete(labels=c("**Female**<br>(n=20)","**Male**<br>(n=74)"))+
+  coord_flip()+ 
+  annotate(geom="text", x="Male", y=100, vjust=2, label=glue("Roland\nWelker\n{rolandwelker} days"), family="rs", color="grey50", size=2)+
+  annotate(geom="text", x="Female", y=89, vjust=-1.5, label=glue("Callie\nRussell\n{callierussell} days"), family="rs", color="grey50", size=2)+
+  annotate(geom="text", x=2.3, y=31, label="Male Avg\n36.2 Days", family="rs", size=2)+
+  annotate(geom="text", x=1.28, y=49.5, label="Female Avg\n49.5 Days", family="rs", size=2)+
+  geom_segment(mapping=aes(y=49.5, yend=49.5, x=1.2, xend=1), linewidth=0.15)+
+  geom_segment(mapping=aes(y=31, yend=36.2, x=2.22, xend=2), linewidth=0.15) +
+  labs(
+    title = "On average, female survivalists outlast their male counterparts",
+    subtitle = subtitle,
+    caption = caption, 
+       x="",
+       y="Days Lasted",
+       fill="Survivalist Status")+
+  theme(text = element_text(family="rs"),
+        axis.ticks = element_blank(),
+        legend.position="top",
+        legend.justification = c(0, 0),
+        legend.title = element_text(face="bold"),
+        axis.text.y=ggtext::element_markdown(hjust=0),
+        axis.line.x = element_line(linewidth=0.5, color="black"),
+        panel.background = element_blank(),
+        plot.title = element_textbox_simple(face="bold", size=15, margin = margin(b=10, t=10), width = grid::unit(6.75, "in"), halign=0, hjust=0.15),
+        plot.subtitle = element_textbox_simple( width = grid::unit(6.75, "in"), halign=0, hjust=0.15),
+        plot.caption = element_textbox_simple(color="black"),
+        panel.grid = element_blank(), 
+        panel.grid.major.x = element_line(linewidth=0.2, color='grey90'),
+        legend.key = element_blank())
+
+# ggsave("alone-survivalists.png", bg="white", height=6, width=8)
+
+```
+
+# Jacob Jameson plot of survival across the whole show
+```{r}
+# load packages ----------------------------------------------------------
+rm(list = ls())
+
+libs <- c("tidyverse", "tidytuesdayR", "broom",
+          "wesanderson", "ggrepel", "ggtext", "showtext", 
+          "lubridate", "ggExtra", "dvmisc")
+
+installed_libs <- libs %in% rownames (installed.packages ())
+if (any (installed_libs == F)) {
+  install.packages (libs[!installed_libs])
+}
+
+invisible(lapply (libs, library, character.only = T))
+
+font_add_google("Pragati Narrow")
+showtext_auto()
+
+# load dataset ------------------------------------------------------------
+tuesdata <- tidytuesdayR::tt_load('2023-01-24')
+
+survivalists_raw <- readr::read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2023/2023-01-24/survivalists.csv')
+# tuesdata <- tidytuesdayR::tt_load('2023-01-24')
+# 
+episodes_raw <- tuesdata$episodes
+survivalists_raw <- tuesdata$survivalists
+
+```
+
+```{r}
+# wrangle data ------------------------------------------------------------
+
+episodes <- episodes_raw %>%
+  select(season, episode, imdb_rating, n_ratings)
+
+survivalists <- survivalists_raw %>%
+  select(season, episode = result, days_lasted, name)
+
+data <- merge(survivalists, episodes, by=c('season', 'episode'))
+
+
+df_episodes_avg <-
+  data %>% 
+  arrange(season, episode) %>% 
+  mutate(episode_id = row_number()) %>% 
+  group_by(season) %>% 
+  mutate(
+    avg = mean(days_lasted),
+    episode_mod = episode_id + (9 * season),
+    mid = mean(episode_mod)) %>% 
+  ungroup() %>% 
+  mutate(season = factor(season))
+
+
+df_lines <-
+  df_episodes_avg %>% 
+  group_by(season) %>% 
+  summarize(
+    start_x = min(episode_mod) - 5,
+    end_x = max(episode_mod) + 5,
+    y = unique(avg)
+  ) %>% 
+  pivot_longer(
+    cols = c(start_x, end_x),
+    names_to = "type",
+    values_to = "x"
+  ) %>% 
+  mutate(
+    x_group = if_else(type == "start_x", x + .1, x - .1),
+    x_group = if_else(type == "start_x" & x == min(x), x_group - .1, x_group),
+    x_group = if_else(type == "end_x" & x == max(x), x_group + .1, x_group)
+  )
+
+library(png)
+library(patchwork)
+library(grid)
+
+# background <- png::readPNG("alone.png")
+# w <- matrix(rgb(background[,,1],background[,,2],
+#                 background[,,3], background[,,4] * 0.05),
+#             nrow=dim(background)[1]) 
+
+
+# theme --------------------------------------------------------------------
+
+theme_set(theme_minimal(base_family = "Pragati Narrow"))
+
+theme_update(
+  axis.title = element_blank(),
+  axis.text = element_text(color = "grey40"),
+  legend.text = element_text(color = "black",  size=15),
+  legend.title = element_blank(),
+  axis.text.x = element_blank(),
+  axis.text.y = element_text(color = "black", size = 15),
+  axis.ticks = element_line(color = "grey91", size = .5),
+  axis.ticks.length.x = unit(1.3, "lines"),
+  axis.ticks.length.y = unit(.1, "lines"),
+  panel.grid = element_blank(),
+  plot.margin = margin(20, 40, 20, 40),
+  legend.position = 'top',
+  text = element_text(color = "black", size = 55),
+  plot.background = element_rect(fill = "#f5f5f2", color = NA), 
+  panel.background = element_rect(fill = "#f5f5f2", color = NA), 
+legend.title.align=0.5,
+  plot.title = element_text(
+    color = "black", 
+    size = 68, 
+    face = "bold",
+    margin = margin(t = 15),
+    hjust = 0.5
+  ),
+  plot.subtitle = element_text(
+    color = "grey10", 
+    size = 44,
+    lineheight = 1.35,
+    margin = margin(t = 15),
+    hjust = 0.5
+  ),
+  plot.title.position = "plot",
+  plot.caption.position = "plot",
+  plot.caption = element_text(
+    color = "grey20", 
+    size = 18,
+    lineheight = 1.2, 
+    hjust = 0.5,
+    margin = margin(t = 50) 
+  ))
+
+
+
+# plot --------------------------------------------------------------------
+
+
+p <- df_episodes_avg %>% 
+  ggplot(aes(episode_mod, days_lasted)) +
+  geom_hline(
+    data = tibble(y = seq(0, 100, by = 10)),
+    aes(yintercept = y),
+    color = "grey82",
+    size = .5
+  )
+
+
+
+p <- p + 
+  geom_segment(
+    aes(
+      xend = episode_mod,
+      yend = avg, 
+      color = season, 
+      color = after_scale(colorspace::lighten(color, .2))
+    )
+  )
+
+
+p <- p + 
+  geom_line(
+    data = df_lines,
+    aes(x, y),
+    color = "grey40"
+  ) +
+  geom_line(
+    data = df_lines,
+    aes(
+      x_group, 
+      y, 
+      color = season, 
+      color = after_scale(colorspace::darken(color, .2))
+    ),
+    size = 3.5
+  ) + 
+  geom_point(
+    aes(color = season)
+  ) 
+
+
+
+p <- p + 
+  geom_label(
+    aes(
+      mid, 
+      -10.20,
+      label = glue::glue(" SEASON {season} "),
+      color = season, 
+    ),
+    size = 7,
+    fill = NA,
+    family = "Pragati Narrow",
+    fontface = "bold",
+    label.padding = unit(.5, "lines"),
+    label.r = unit(.25, "lines"), 
+    label.size = NA
+  ) 
+
+p <- p + 
+  scale_y_continuous(
+    limits = c(-15, 110),
+    breaks = seq(0, 100, by = 20),
+  ) +
+  scale_color_manual(
+    values = c("#9986A5", "#999999", "#E69F00", "#56B4E9", "#009E73",
+               "#000000", "#0072B2", "#D55E00", "#CC79A7"),
+    guide = FALSE 
+  ) +
+  labs(caption= str_wrap("Data comes from the TV series Alone, 
+                         collected and shared by Dan Oehm. As described in Oehm's blog post, 
+                         in the survival TV series ‘Alone’, 10 survivalists are dropped in 
+                         an extremely remote area and must fend for themselves. 
+                         They aim to last 100 days in the Artic winter, living off the 
+                         land through their survival skills, endurance, and mental 
+                         fortitude • Visualization by @JacobCJameson", 200),
+       subtitle= "A Season-by-Season Breakdown of ALONE Contestant Longevity",
+       title="SURVIVING SOLITUDE",
+       ylab = 'Days Survived') +
+  guides(
+    size = guide_bins(
+      show.limits = TRUE,
+      direction = "horizontal",
+      title.position = "top",
+      title.hjust = .5)) +
+  geom_label(aes(x=129,y=100, label = "Roland Welker made it 100 days"), size=5,
+             hjust = 0, vjust = "inward",
+             nudge_x = 0.05, nudge_y = 2,
+             label.padding = unit(0.2, "lines"),
+             label.size = NA, fill='#f5f5f2', color='#0072B2') +
+  geom_label(aes(x=20,y=-5, label = "Josh Chavez made it 0 days"), size=5,
+             hjust = 0, vjust = "inward",
+             nudge_x = 0.05, nudge_y = 2,
+             label.padding = unit(0.2, "lines"), 
+             label.size = NA, fill='#f5f5f2', color='#9986A5') 
+  #annotation_custom(xmin=-Inf, ymin=-Inf, xmax=Inf, ymax=Inf, rasterGrob(w)) 
+
+p
+```
+
+
+
+# Recreation of Hanzholah Shobri work - survival modeling by gender
+```{r}
+survivalists <- readr::read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2023/2023-01-24/survivalists.csv')
+
+data_p1 <- tibble(day = rep(0:100, each = 2), 
+                  sex = rep(c("Male", "Female"), 101)) %>% 
+  mutate(survivor = purrr::map2_dbl(day, sex, function(d, g) {
+    sum(survivalists$days_lasted[survivalists$gender == g] >= d)
+  })) %>% 
+  group_by(sex) %>% 
+  mutate(survivor = survivor / first(survivor))
+
+ggplot(data_p1, aes(x = day, y = survivor, colour = sex)) +
+  # add graphical elements
+  geom_line(size = 1.2) +
+  # manually configure graphical elements
+  scale_y_continuous(breaks = 0:5 / 5) +
+  scale_colour_manual(values = c("#765631", "#4234A9")) +
+  # add plot labels
+  labs(title = "Survival curves",
+       subtitle = paste("there is some evidence that, on average, women tend",
+                        "to survive longer than men"),
+       y = "Proportion Remaining",
+       x = "Days Lasted",
+       colour = "Gender") +
+  # configure the theme
+  theme(
+    plot.title = element_text(face = "bold"), 
+    plot.title.position = "plot",
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor.y = element_blank(),
+    panel.grid.minor.x = element_blank(),
+  )
+
+```
+
+Visualization of items correlated with ppl who tend to last longer on the show
+```{r}
+tuesdata <- tidytuesdayR::tt_load('2023-01-24')
+loadouts <- tuesdata$loadouts
+survivalists <- tuesdata$survivalists
+
+data_p3 <- full_join(survivalists, 
+                     loadouts, 
+                     by = c("season", "name"))%>% 
+  group_by(item) %>% 
+  summarise(n = n(), days_lasted = mean(days_lasted)) %>% 
+  arrange(desc(days_lasted)) %>% 
+  filter(n >= 5) %>% 
+  mutate(top3 = c(rep(TRUE, 3), rep(FALSE, n() - 3)),
+         #item = paste0("**", item, "**<br/>(n=", n, ")"),
+         item = forcats::fct_reorder(item, days_lasted))
+
+```
+
+```{r}
+# create visualisations
+
+days_lasted_average <- round(mean(survivalists$days_lasted),0)
+
+ggplot(data_p3, aes(y = item, x = days_lasted, fill = top3)) +
+  # add graphical elements
+  geom_col(width = .5) +
+  geom_vline(xintercept = days_lasted_average, linetype = "twodash") +
+  annotate("text", label = paste("avg:", days_lasted_average, "days"),
+           x = 39.5, y = 1, size = 2.5, hjust = 0) +
+  geom_text(aes(label = round(days_lasted, 1)), 
+            size = 3, hjust = 0, nudge_x = .5) +
+  # manually configure graphical elements
+  scale_fill_manual(values = c("lightblue","#2B4162")) +
+  # add plot labels
+  labs(
+    title = "Certain items frequently brought by survivalists who last longer",
+    subtitle = paste(
+      "For all common loadout items (n > 5), survivalists who carried tapping",
+      "wire, frying pan, or paracord <br/>tend to last longer."
+    ), 
+    caption = "Source: {alone package}",
+    x = "Days lasted on average",
+    y = NULL,
+    parse = TRUE
+  ) +
+  # configure the theme
+  theme(
+    plot.title = element_markdown(face = "bold"),
+    plot.title.position = "plot",
+    plot.subtitle = element_markdown(),
+    plot.background = element_rect(fill = "white", color = FALSE),
+    plot.margin = unit(c(5, 5, 5, 5), units = "mm"),
+    panel.background = element_rect(fill = "white", color = FALSE),
+    panel.grid = element_blank(),
+    axis.title.x = element_markdown(colour = "#333333", size = 9.5, face = "bold"),
+    axis.text.y = element_markdown(size = 7),
+    legend.position = "none",
+  )
+```
+
+Same data but with a ridgeline viz
+```{r}
+
+
+library(patchwork)
+library(ggridges)
+
+ridges <- 
+  loadouts %>% 
+  left_join(survivalists %>% 
+              select(name, season, days_lasted)) %>% 
+  add_count(item) %>% 
+  group_by(item) %>% 
+  mutate(avg_days_lasted = mean(days_lasted)) %>% 
+  ungroup() %>% 
+    mutate(
+    item = fct_lump_min(item, min = 5),
+    item = fct_reorder(item, avg_days_lasted),
+  )
+
+ridges <- ridges %>%
+  mutate(
+    n_category = cut(
+      n,
+      breaks = seq(0, 100, by = 10),  # Breaks for 10-width bins
+      labels = c("0-10", "11-20", "21-30", "31-40", "41-50", "51-60", "61-70", "71-80", "81-90", "91-100"),  # Custom labels
+      include.lowest = TRUE
+    )
+  )
+
+ridges_plot <- ridges %>% 
+  ggplot(aes(x = days_lasted, y = item, fill = n_category)) +  # Fill by n_category
+  ggridges::geom_density_ridges(
+    panel_scaling = FALSE, 
+    show.legend = F, 
+    alpha = 0.8
+  ) +
+  scale_fill_viridis_d(option = "inferno", direction = 1) +  # Use a discrete viridis palette
+  labs(
+    title = "Which items do you want by your side?",
+    subtitle = "The longest-lasting contestests carry loadouts that often include less commonly-chosen items.\n",
+    x = "Total days survived",
+    y = NULL,
+    #fill = "Number of Users"
+  ) +
+  theme_minimal()
+
+items_plot <- ridges %>%
+  group_by(item) %>% 
+  summarize(
+    avg_days_lasted = mean(days_lasted),  # Calculate average days lasted
+    n = first(n),
+    n_category = first(n_category),
+    .groups = "drop"
+  ) %>%
+  distinct(item, .keep_all = TRUE) %>%
+  ggplot(aes(x = item, y = avg_days_lasted, fill = n_category)) +
+  geom_col(alpha = 0.8, show.legend = T) +
+  #geom_label(aes(label = round(avg_days_lasted, 0)), size = 3) +  
+  scale_fill_viridis_d(option = "inferno", direction = 1,
+                           limits = levels(ridges$n_category)) + 
+  guides(
+    fill = guide_legend(reverse = TRUE)  # Reverse the legend order
+  ) +
+  coord_flip() +
+  labs(
+    title = "",
+    y = "Average days survived",
+    x = "",
+    fill = "Total Number\n of Users"
+  ) +
+  theme_minimal() +
+  theme(axis.text.y = element_blank(), axis.ticks.y = element_blank())
+
+ridges_plot + items_plot
+```
+
+Cluster analysis of loadouts.
+```{r}
+df_clusters <- full_join(survivalists, 
+                     loadouts, 
+                     by = c("season", "name"))
+
+```
+
+```{r}
+# One-hot encode items for clustering
+item_matrix <- df_clusters %>%
+  select(name, item) %>%
+  mutate(value = 1) %>%
+  distinct(name, item, .keep_all = TRUE) %>%  # Remove duplicates
+  pivot_wider(names_from = item, values_from = value, values_fill = 0)
+
+# Apply k-means clustering
+set.seed(123)
+kmeans_result <- kmeans(item_matrix %>% select(-name), centers = 2)  # Exclude `name`
+
+# Add cluster labels to item_matrix
+item_matrix <- item_matrix %>%
+  mutate(cluster = kmeans_result$cluster)
+
+result <- df_clusters %>%
+  left_join(item_matrix %>% select(name, cluster), by = "name")
+
+# Compare survival times by cluster
+result %>%
+  group_by(cluster) %>%
+  summarize(mean_days = mean(days_lasted), sd_days = sd(days_lasted))
+```
+
+```{r}
+library(forcats)
+library(tidytext)
+
+cluster_summary <- result %>%
+  group_by(cluster) %>%
+  summarize(mean_days = mean(days_lasted, na.rm = TRUE)) %>%
+  arrange(desc(mean_days))
+
+longest_cluster <- cluster_summary$cluster[1]
+shortest_cluster <- cluster_summary$cluster[2]
+
+# Calculate item proportions by cluster
+cluster_item_summary <- item_matrix %>%
+  pivot_longer(cols = -c(name, cluster), names_to = "item", values_to = "selected") %>%
+  group_by(cluster, item) %>%
+  summarize(
+    proportion = mean(selected),  # Proportion of participants selecting each item
+    .groups = "drop"
+  ) %>%
+  mutate(item = reorder_within(item, proportion, cluster))  # Reorder within clusters
+
+# Visualize with a grouped bar chart
+cluster_item_summary %>%
+  ggplot(aes(x = item, y = proportion, fill = factor(cluster))) +
+  geom_col(alpha = 0.8, show.legend = FALSE) +
+  scale_y_continuous(labels = scales::percent) +
+  coord_flip() +
+  facet_wrap(~ cluster, scales = "free_y") +  # Facet by cluster
+  scale_x_reordered() +  # Use reordered items
+  labs(
+    title = "Item Selection Proportion by Cluster",
+    x = "Item",
+    y = "Proportion of Participants"
+  ) +
+  theme_minimal() +
+  theme(
+    strip.text = element_text(size = 10, face = "bold"),  # Customize facet labels
+    axis.text.y = element_text(size = 8)
+  )
+
+```
+
+```{r}
+item_diff <- item_matrix %>%
+  pivot_longer(cols = -c(name, cluster), names_to = "item", values_to = "selected") %>%
+  group_by(cluster, item) %>%
+  summarize(proportion = mean(selected), .groups = "drop") %>%
+  pivot_wider(names_from = cluster, values_from = proportion, values_fill = 0) %>%
+  mutate(
+    diff = !!sym(as.character(longest_cluster)) - !!sym(as.character(shortest_cluster))  # Difference
+  )
+
+
+
+item_diff %>%
+  ggplot(aes(x = reorder(item, diff), y = diff, fill = diff > 0)) +
+  geom_col(show.legend = FALSE, alpha = 0.8) +
+  coord_flip() +
+  scale_fill_manual(values = c("TRUE" = "#C3423F", "FALSE" = "#2B4162")) +
+  labs(
+    title = "What items do the longest-surviving contestants choose more often than the shortest-surviving folks?",
+    x = "Item",
+    y = "Difference"
+  ) +
+  theme_minimal()
+
+```
+
+
+
+
+
+
+
+
